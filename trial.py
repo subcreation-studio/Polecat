@@ -12,7 +12,7 @@ total_sf_half_moves = 0
 print("Running trials...")
 
 player.simulate_player = True
-player.suppress_game_text = True
+player.suppress_game_text = False
 
 for i in range(trials):
     played_game = player.play_game()
