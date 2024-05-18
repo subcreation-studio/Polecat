@@ -1,6 +1,6 @@
 
 # Trial settings:
-NUMBER_OF_TRIALS = 1
+NUMBER_OF_TRIALS = 6
 
 # Engine settings:
 PATH_TO_STOCKFISH = "./Stockfish/stockfish_14.1_win_x64/stockfish_14.1_win_x64.exe"

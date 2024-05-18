@@ -7,13 +7,15 @@ import leela_weights_greedy
 import maia_player_model
 import stochastic_uct
 import fixed_stoch_uct
+import aggro_fixed_stoch_uct
 import blunder_creator
 
 # Program will play a game of chess with you.
 
 # Options for the computer opponent are the following:
-# "blunder creator", "maia player model", "stockfish", "leela weights", "expectimax", or "stochastic uct"
-computer_engine = "fixed stochastic uct"
+# "blunder creator", "maia player model", "stockfish", "leela weights", "expectimax", "stochastic uct",
+# or "aggro fixed stochastic uct"
+computer_engine = "aggro fixed stochastic uct"
 
 # Playing options.
 simulate_player = False
@@ -66,6 +68,8 @@ def get_computer_move(input_board):
         return stochastic_uct.get_best_move(position, 2000, .01, .02)
     elif computer_engine == "fixed stochastic uct":
         return fixed_stoch_uct.get_best_move(position, 2000, .01, .02)
+    elif computer_engine == "aggro fixed stochastic uct":
+        return aggro_fixed_stoch_uct.get_best_move(position, 8000, .01, .02)
     elif computer_engine == "expectimax":
         return expectimax.get_best_move(position, 4, .01, .01, .02)
     else:
@@ -73,9 +77,12 @@ def get_computer_move(input_board):
         exit(1)
 
 
-def play_game():
-
-    computer_plays_white = random.choice([True, False])
+def play_game(play_random=True, is_computer_white=True):
+    computer_plays_white = None
+    if play_random:
+        computer_plays_white = random.choice([True, False])
+    else:
+        computer_plays_white = is_computer_white
 
     if not suppress_game_text:
         if computer_plays_white:
@@ -123,10 +130,16 @@ def play_game():
         if outcome is not None:
             if outcome.result() == "1-0":
                 if not suppress_game_text:
-                    print("You win, congratulations!")
+                    if computer_plays_white:
+                        print("Checkmate.")
+                    else:
+                        print("You win, congratulations!")
             elif outcome.result() == "0-1":
                 if not suppress_game_text:
-                    print("Checkmate.")
+                    if computer_plays_white:
+                        print("You win, congratulations!")
+                    else:
+                        print("Checkmate.")
             else:
                 if not suppress_game_text:
                     print("A draw!")

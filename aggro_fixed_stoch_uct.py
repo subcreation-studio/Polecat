@@ -1,5 +1,5 @@
 import backends
-from treenode import TreeNode
+from aggro_treenode import TreeNode
 import chess
 
 
@@ -12,10 +12,17 @@ opponent_probability_cutoff = 0.0
 engine_culling_cutoff = 0.0
 tendril_count = 16
 
+curr_position = None
+
+curr_eval = None
+
 
 def get_best_move(position, nodes_limit, own_probability_cutoff, enemy_probability_cutoff):
 
     # Assign global variables from given parameters.
+    global curr_position
+    curr_position = position
+
     global playing_as_white
     playing_as_white = len(position) % 2 == 0
 
@@ -24,6 +31,11 @@ def get_best_move(position, nodes_limit, own_probability_cutoff, enemy_probabili
 
     global opponent_probability_cutoff
     opponent_probability_cutoff = enemy_probability_cutoff
+
+    # Get the current position's eval. We'll need it later.
+    global curr_eval
+    curr_eval = strong_evaluator.get_expected_outcome_from_moves(curr_position)
+    curr_eval = (curr_eval + 1.0) / 2.0
 
     # Create tree root.
     root_node = TreeNode(total_value=0, visit_count=0, probability=1.0, position=position)
@@ -48,6 +60,12 @@ def perform_iteration(root_node):
     # TRAVERSAL
     #
 
+    # Rustle up some leaf nodes to process.
+
+    # TODO: Wait, hang on a minute: won't this just keep selecting the same leaf node?
+    # No, wait, the hope here is that it will go down the tree randomly, since the select_child
+    # function has randomness when dealing with a chance node.
+
     leaf_nodes = []
     for i in range(tendril_count):
         leaf_node = root_node
@@ -66,27 +84,44 @@ def perform_iteration(root_node):
     chance_node_positions = []
 
     for index in range(len(leaf_nodes)):
-        # Skip expansion if the node is terminal.
+        # Skip expansion if the leaf node is terminal (i.e. checkmate or draw).
         if is_terminal_position(leaf_nodes[index].position):
-            pass
-        elif leaf_nodes[index].visit_count > 0:
-            if leaf_nodes[index].is_own_move(playing_as_white):
-                # Own move node
-                legal_moves = get_legal_moves_from_position(leaf_nodes[index].position)
-                probabilities = []
-                for i in range(len(legal_moves)):
-                    probabilities.append(1.0)
-                probability_distribution = list(zip(legal_moves, probabilities))
+            continue
 
-                leaf_nodes[index].expand_with_probability_distribution(probability_distribution)
-                leaf_nodes[index] = leaf_nodes[index].select_child(playing_as_white)
+        # Skip leaf node if it has not been visited.
+        if leaf_nodes[index].visit_count <= 0:
+            continue
 
-            else:
-                # Chance node
-                chance_nodes.append(leaf_nodes[index])
-                chance_node_positions.append(leaf_nodes[index].position)
+        # Previously visited leaf nodes get expanded.
 
+        if leaf_nodes[index].is_own_move(playing_as_white):
+            # Leaf node is an OWN MOVE node.
+            # So we create children for the node and pick one of those to consider.
+            legal_moves = get_legal_moves_from_position(leaf_nodes[index].position)
+            probabilities = []
+            for i in range(len(legal_moves)):
+                probabilities.append(1.0)
+            probability_distribution = list(zip(legal_moves, probabilities))
+
+            # This is kind of goofy, but it looks like for an OWN MOVE node, I just expand
+            # the node with all legal moves assigned a probability of 1.0.
+            # I guess this makes sense so you can just propagate value up the tree, multiplying
+            # by probability each time. Since the engine can pick any move it wants,
+            # a probability of 1.0 for each move makes sense.
+            leaf_nodes[index].expand_with_probability_distribution(probability_distribution)
+            leaf_nodes[index] = leaf_nodes[index].select_child(playing_as_white)
+
+            # TODO: What the hell? Wouldn't we want to append this child node to the chance_nodes list?
+
+        else:
+            # Leaf node is a CHANCE node. We will need to expand it to consider it.
+            chance_nodes.append(leaf_nodes[index])
+            chance_node_positions.append(leaf_nodes[index].position)
+
+    # Get probabilities from MAIA.
     chance_evaluations = weak_evaluator.get_evaluations_from_moves(chance_node_positions)
+
+    # For each CHANCE node, expand it according to MAIA's policy
     for index in range(len(chance_nodes)):
         leaf_index = leaf_nodes.index(chance_nodes[index])
         probability_distribution = chance_evaluations[index].move_policy_list
@@ -101,26 +136,51 @@ def perform_iteration(root_node):
     # ROLLOUT
     #
 
+    # Note: The "Rollout" phase gets its name from the typical Monte-Carlo method of randomly rolling out the rest
+    # of the game randomly in order to get a value guess. In this algorithm, we can just use our strong evaluator.
+
     positions = []
 
     for leaf in leaf_nodes:
         positions.append(leaf.position)
+
+    # Get policy values from STRONG LEELA or STOCKFISH
     expected_values = strong_evaluator.get_expected_outcomes_from_moves(positions)
 
+    # Get evals of these positions.
     for index in range(len(leaf_nodes)):
         if is_terminal_position(leaf_nodes[index].position):
-            expected_values[index] = get_result(leaf_nodes[index].position, playing_as_white)
+            # The * 10 here in the next line is just to really make the engine give a fuck about delivering mate.
+            # Previously, it would be similarly jazzed about a winning position and mate.
+            # Even though it's supposed to care about delivering mate quickly, a boring winning position in one move
+            # is still evaluated better than a mate in two, for example.
+            # Really, we should probably just make a function that maps the 0-1 eval to an exponential function.
+            expected_values[index] = get_result(leaf_nodes[index].position, playing_as_white) * 10
         else:
             expected_values[index] = (expected_values[index] + 1.0) / 2.0
 
             if not playing_as_white:
                 expected_values[index] = 1.0 - expected_values[index]  # Reverse objective value if playing as black
 
+        # IMPORTANT: This is the aggro part.
+        # After getting the raw expected value for the outcome, there's one more factor we care about.
+        # We want to divide the eval increase by the number of moves it takes us to get there.
+        moves_it_will_take = len(leaf_nodes[index].position) - len(curr_position)
+        if moves_it_will_take == 0:
+            continue
+        expected_values[index] = (expected_values[index] - curr_eval) / (moves_it_will_take / 2.0)
+
     #
     # BACKPROPAGATION
     #
 
+    # IMPORTANT: Here's the aggro part.
+    # The expected values
+
     for index in range(len(leaf_nodes)):
+
+        # For each leaf node, we add 1 to its visit count and add our eval to its total value.
+        # Repeat for all parents of that leaf node.
 
         curr_node = leaf_nodes[index]
 
